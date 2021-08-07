@@ -108,9 +108,9 @@ Defines whether to commit only current partitions
 
 Defines whether to enable auto commit for Kafka consumer
 
-* Example value: `705`
+* Example value: `true`
 * Type: `optional`
-* Default value: `500`
+* Default value: `false`
 
 ### `SOURCE_KAFKA_CONSUMER_GROUP_ID`
 
@@ -776,7 +776,7 @@ Defines the connect timeout of the MongoDB endpoint. The value specified is in m
 
 List of comma-separated status codes for which Firehose should not retry in case of UPDATE ONLY mode is TRUE
 
-* Example value: `404,400`
+* Example value: `16608,11000`
 * Type: `optional`
 
 ## Retries
