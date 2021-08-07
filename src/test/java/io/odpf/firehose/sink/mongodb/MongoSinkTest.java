@@ -1,15 +1,15 @@
 package io.odpf.firehose.sink.mongodb;
 
-import com.mongodb.MongoClient;
-import com.mongodb.client.MongoCollection;
+import com.mongodb.bulk.BulkWriteError;
 import com.mongodb.client.model.ReplaceOneModel;
 import com.mongodb.client.model.ReplaceOptions;
-import io.odpf.firehose.config.MongoSinkConfig;
+import com.mongodb.client.model.WriteModel;
 import io.odpf.firehose.config.enums.SinkType;
 import io.odpf.firehose.consumer.Message;
 import io.odpf.firehose.metrics.Instrumentation;
 import io.odpf.firehose.sink.mongodb.client.MongoSinkClient;
 import io.odpf.firehose.sink.mongodb.request.MongoRequestHandler;
+import org.bson.BsonDocument;
 import org.bson.Document;
 import org.junit.Before;
 import org.junit.Rule;
@@ -17,11 +17,13 @@ import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.mockito.Mock;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.List;
 
+import static org.junit.Assert.assertEquals;
 import static org.mockito.Mockito.*;
 import static org.mockito.MockitoAnnotations.initMocks;
 
@@ -34,20 +36,13 @@ public class MongoSinkTest {
     private Instrumentation instrumentation;
 
     @Mock
-    private MongoClient client;
-
-    @Mock
-    private MongoSinkConfig mongoSinkConfig;
-
-    @Mock
     private MongoRequestHandler mongoRequestHandler;
 
+    @Mock
     private MongoSinkClient mongoSinkClient;
 
-    @Mock
-    private MongoCollection<Document> mongoCollection;
-
     private List<Message> messages;
+    private List<ReplaceOneModel<Document>> requests;
     private final List<Integer> mongoRetryStatusCodeBlacklist = new ArrayList<>();
 
     @Before
@@ -75,8 +70,7 @@ public class MongoSinkTest {
                 new Document("customer_id", "35452"),
                 new Document(),
                 new ReplaceOptions().upsert(true));
-        List<ReplaceOneModel<Document>> requests = Arrays.asList(replaceOneModel1, replaceOneModel2);
-        mongoSinkClient = new MongoSinkClient(mongoCollection, instrumentation, mongoRetryStatusCodeBlacklist, client, mongoSinkConfig);
+        requests = Arrays.asList(replaceOneModel1, replaceOneModel2);
         when(mongoRequestHandler.getRequest(messageWithJSON)).thenReturn(replaceOneModel1);
         when(mongoRequestHandler.getRequest(messageWithProto)).thenReturn(replaceOneModel2);
     }
@@ -89,5 +83,53 @@ public class MongoSinkTest {
         mongoSink.prepare(messages);
         verify(mongoRequestHandler, times(1)).getRequest(messages.get(0));
         verify(mongoRequestHandler, times(1)).getRequest(messages.get(1));
+    }
+
+    @Test
+    public void shouldGetCorrectRequestsForEachMessageInEsbMessagesList() throws IllegalAccessException, NoSuchFieldException {
+        MongoSink mongoSink = new MongoSink(instrumentation, SinkType.MONGODB.name(), mongoRequestHandler,
+                mongoSinkClient);
+
+        Field requestsField = MongoSink.class.getDeclaredField("requests");
+        requestsField.setAccessible(true);
+        mongoSink.prepare(messages);
+        List<WriteModel<Document>> requestsList = (List<WriteModel<Document>>) requestsField.get(mongoSink);
+
+        assertEquals(this.requests.get(0), requestsList.get(0));
+        assertEquals(this.requests.get(1), requestsList.get(1));
+    }
+
+    @Test
+    public void shouldReturnFailedMessagesWhenBulkRequestFailed() throws NoSuchFieldException, IllegalAccessException {
+        BulkWriteError writeError1 = new BulkWriteError(400, "Duplicate Key Error", new BsonDocument(), 0);
+        BulkWriteError writeError2 = new BulkWriteError(11000, "Duplicate Key Error", new BsonDocument(), 1);
+        List<BulkWriteError> writeErrors = Arrays.asList(writeError1, writeError2);
+
+        MongoSink mongoSink = new MongoSink(instrumentation, SinkType.MONGODB.name(), mongoRequestHandler,
+                mongoSinkClient);
+        Field messagesField = MongoSink.class.getDeclaredField("messages");
+        messagesField.setAccessible(true);
+        messagesField.set(mongoSink, this.messages);
+
+        when(mongoSinkClient.processRequest(any())).thenReturn(writeErrors);
+        List<Message> failedMessages = mongoSink.execute();
+        assertEquals(2, failedMessages.size());
+        assertEquals(this.messages.get(0), failedMessages.get(0));
+        assertEquals(this.messages.get(1), failedMessages.get(1));
+    }
+
+    @Test
+    public void shouldReturnEmptyListWhenBulRequestSucceeds() throws NoSuchFieldException, IllegalAccessException {
+        List<BulkWriteError> writeErrors = new ArrayList<>();
+        MongoSink mongoSink = new MongoSink(instrumentation, SinkType.MONGODB.name(), mongoRequestHandler,
+                mongoSinkClient);
+
+        Field messagesField = MongoSink.class.getDeclaredField("messages");
+        messagesField.setAccessible(true);
+        messagesField.set(mongoSink, this.messages);
+
+        when(mongoSinkClient.processRequest(any())).thenReturn(writeErrors);
+        List<Message> failedMessages = mongoSink.execute();
+        assertEquals(0, failedMessages.size());
     }
 }

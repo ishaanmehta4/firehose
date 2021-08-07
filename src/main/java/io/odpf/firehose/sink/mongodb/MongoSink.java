@@ -71,7 +71,7 @@ public class MongoSink extends AbstractSink {
      * @since 0.1
      */
     @Override
-    protected List<Message> execute() throws Exception {
+    protected List<Message> execute() {
         List<BulkWriteError> writeErrors = mongoSinkClient.processRequest(requests);
         return writeErrors.stream()
                 .map(writeError -> messages.get(writeError.getIndex()))
